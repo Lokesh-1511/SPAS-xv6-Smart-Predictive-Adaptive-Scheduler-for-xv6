@@ -1,3 +1,8 @@
+// --- Our new scheduler definitions ---
+#define HISTORY_SIZE 10   // Size of our moving average window
+#define LOAD_PERIOD 100   // Calculate load every 100 ticks
+// --- End of new definitions ---
+
 // Per-CPU state
 struct cpu {
   uchar apicid;                // Local APIC ID
@@ -33,6 +38,11 @@ struct context {
 };
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+
+// --- Our new enum definition ---
+// Simulated CPU frequency states
+enum freq_level { LOW, MEDIUM, HIGH };
+// --- End of new enum ---
 
 // Per-process state
 struct proc {

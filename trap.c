@@ -11,8 +11,36 @@
 // Interrupt descriptor table (shared by all CPUs).
 struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
-struct spinlock tickslock;
-uint ticks;
+
+// --- CORRECTED LINES ---
+extern struct spinlock tickslock;
+extern uint ticks;
+// --- END OF CORRECTION ---
+
+// --- Our new code ---
+extern int is_idle;
+extern uint tot_ticks;
+extern uint idle_ticks;
+// --- End of new code ---
+
+// --- Phase 2: Extern Variables ---
+extern int cpu_load;
+extern int predicted_load;
+extern int load_history[];
+extern int history_index;
+extern enum freq_level current_frequency;
+extern int THRESH_LOW_TO_MED;
+extern int THRESH_MED_TO_HIGH;
+// --- End of Phase 2 Externs ---
+
+// --- Phase 4: Extern Thermal Variables ---
+extern int virtual_temp;
+extern int HEATING_FACTOR;
+extern int COOLING_FACTOR;
+extern int TEMP_THROTTLE_LIMIT;
+extern int AMBIENT_TEMP;
+// --- End of Phase 4 Externs ---
+
 
 void
 tvinit(void)
@@ -31,6 +59,74 @@ idtinit(void)
 {
   lidt(idt, sizeof(idt));
 }
+
+
+// --- Phase 2 & 4: Predictive Scheduler & Thermal Logic ---
+
+// This function is called every LOAD_PERIOD ticks from the timer interrupt
+void
+update_scheduler_analytics(void)
+{
+  int i; // Declare 'i' at the top of the function
+
+  // 1. Calculate Current CPU Load
+  if (tot_ticks > 0) {
+    // Load = (total ticks - idle ticks) * 100 / total ticks
+    cpu_load = ((tot_ticks - idle_ticks) * 100) / tot_ticks;
+  } else {
+    cpu_load = 0;
+  }
+
+  // --- Phase 4: Update Virtual Temperature ---
+  // Apply heating based on current load (scaled by factor)
+  virtual_temp += (cpu_load * HEATING_FACTOR) / 100; // Divide by 100 since load is %
+  // Apply cooling
+  virtual_temp -= COOLING_FACTOR;
+  // Clamp to ambient temperature
+  if (virtual_temp < AMBIENT_TEMP) {
+    virtual_temp = AMBIENT_TEMP;
+  }
+  // --- End Phase 4 Temperature Update ---
+
+
+  // 2. Update Moving Average History
+  load_history[history_index] = cpu_load;
+  history_index = (history_index + 1) % HISTORY_SIZE;
+
+  // 3. Calculate Predicted Load (Moving Average)
+  int total_load = 0;
+  for (i = 0; i < HISTORY_SIZE; i++) {
+    total_load += load_history[i];
+  }
+  predicted_load = total_load / HISTORY_SIZE;
+
+  // 4. Dynamic Frequency Simulation (based on predicted load)
+  enum freq_level next_frequency; // Temporary variable
+  if (predicted_load > THRESH_MED_TO_HIGH) {
+    next_frequency = HIGH;
+  } else if (predicted_load > THRESH_LOW_TO_MED) {
+    next_frequency = MEDIUM;
+  } else {
+    next_frequency = LOW;
+  }
+
+  // --- Phase 4: Apply Thermal Throttling ---
+  // Override frequency decision if temperature is too high
+  if (virtual_temp > TEMP_THROTTLE_LIMIT) {
+    next_frequency = LOW; // Force LOW frequency regardless of predicted load
+  }
+  // --- End Phase 4 Throttling ---
+
+  // Update the global frequency state
+  current_frequency = next_frequency;
+
+
+  // 5. Reset counters for the next period
+  tot_ticks = 0;
+  idle_ticks = 0;
+}
+// --- End of Phase 2 & 4 Logic ---
+
 
 //PAGEBREAK: 41
 void
@@ -51,6 +147,17 @@ trap(struct trapframe *tf)
     if(cpuid() == 0){
       acquire(&tickslock);
       ticks++;
+
+      // --- Our new code ---
+      tot_ticks++;       // Increment total ticks
+      if(is_idle)
+        idle_ticks++;    // Increment idle ticks if scheduler is idle
+
+      // Call our new scheduler logic periodically
+      if(ticks % LOAD_PERIOD == 0)
+        update_scheduler_analytics();
+      // --- End of new code ---
+
       wakeup(&ticks);
       release(&tickslock);
     }

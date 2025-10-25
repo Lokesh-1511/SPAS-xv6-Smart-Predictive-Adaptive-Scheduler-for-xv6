@@ -20,6 +20,40 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+struct spinlock tickslock;
+uint ticks;
+
+// --- Our new counters ---
+uint tot_ticks = 0;
+uint idle_ticks = 0;
+int is_idle = 0;
+// --- End of new counters ---
+
+// --- Phase 2: Predictive Scheduler Variables ---
+// HISTORY_SIZE and LOAD_PERIOD are now defined in proc.h
+
+int cpu_load = 0;         // Current CPU load (0-100)
+int predicted_load = 0;   // Predicted load (0-100)
+int load_history[HISTORY_SIZE]; // Array to store recent load values
+int history_index = 0;    // Current position in the history array
+
+// Simulated CPU frequency states
+char *freq_str[] = { "LOW", "MEDIUM", "HIGH" }; // String names for printing
+enum freq_level current_frequency = LOW;
+
+// Initial (non-adaptive) thresholds
+int THRESH_LOW_TO_MED = 30; // 30%
+int THRESH_MED_TO_HIGH = 70; // 70%
+// --- End of Phase 2 Variables ---
+
+// --- Phase 4: Virtual Thermal Variables ---
+int virtual_temp = 250;     // Temperature in tenths of degrees C (e.g., 250 = 25.0 C)
+int HEATING_FACTOR = 20;    // UPDATED: Increase per % load per period (e.g., 100% load adds 2.0 C)
+int COOLING_FACTOR = 5;     // UPDATED: Decrease per period (e.g., cools by 0.5 C)
+int TEMP_THROTTLE_LIMIT = 800; // Throttle if temp > 80.0 C
+int AMBIENT_TEMP = 250;     // Minimum temperature (25.0 C)
+// --- End of Phase 4 Variables ---
+
 void
 pinit(void)
 {
@@ -38,10 +72,10 @@ struct cpu*
 mycpu(void)
 {
   int apicid, i;
-  
+
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
-  
+
   apicid = lapicid();
   // APIC IDs are not guaranteed to be contiguous. Maybe we should have
   // a reverse map, or reserve a register to store &cpus[i].
@@ -124,7 +158,7 @@ userinit(void)
   extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
-  
+
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
@@ -143,14 +177,10 @@ userinit(void)
   p->cwd = namei("/");
 
   // this assignment to p->state lets other cores
-  // run this process. the acquire forces the above
-  // writes to be visible, and the lock is also needed
-  // because the assignment might not be atomic.
-  acquire(&ptable.lock);
-
+  // run this process. the acquire-release detection
+  // logic relies on the fact that p->state is written
+  // only once when it is changed to RUNNABLE.
   p->state = RUNNABLE;
-
-  release(&ptable.lock);
 }
 
 // Grow current process's memory by n bytes.
@@ -212,11 +242,7 @@ fork(void)
 
   pid = np->pid;
 
-  acquire(&ptable.lock);
-
   np->state = RUNNABLE;
-
-  release(&ptable.lock);
 
   return pid;
 }
@@ -275,7 +301,7 @@ wait(void)
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
-  
+
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
@@ -306,7 +332,7 @@ wait(void)
       return -1;
     }
 
-    // Wait for children to exit.  (See wakeup1 call in proc_exit.)
+    // Wait for children to exit.  (See wakeup1 call in exit.)
     sleep(curproc, &ptable.lock);  //DOC: wait-sleep
   }
 }
@@ -325,16 +351,24 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
+
+    // --- Our new code: Assume we are idle until proven otherwise ---
+    is_idle = 1;
+    // --- End of new code ---
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+
+      // --- Our new code: Found a process, so we are NOT idle ---
+      is_idle = 0;
+      // --- End of new code ---
 
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -418,7 +452,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   if(p == 0)
     panic("sleep");
 
@@ -437,7 +471,7 @@ sleep(void *chan, struct spinlock *lk)
   }
   // Go to sleep.
   p->chan = chan;
-  p->state = SLEEPING;
+p->state = SLEEPING;
 
   sched();
 
