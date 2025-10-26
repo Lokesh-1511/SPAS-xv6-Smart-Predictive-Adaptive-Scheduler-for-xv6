@@ -1,6 +1,9 @@
 // --- Our new scheduler definitions ---
 #define HISTORY_SIZE 10   // Size of our moving average window
 #define LOAD_PERIOD 100   // Calculate load every 100 ticks
+#define QUANTUM_LOW 50    // Time slice for LOW frequency (ticks)
+#define QUANTUM_MEDIUM 100 // Time slice for MEDIUM frequency (ticks)
+#define QUANTUM_HIGH 150  // Time slice for HIGH frequency (ticks)
 // --- End of new definitions ---
 
 // Per-CPU state
@@ -44,6 +47,9 @@ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 enum freq_level { LOW, MEDIUM, HIGH };
 // --- End of new enum ---
 
+// Default priority for new processes (lower value = higher priority)
+#define DEFAULT_PRIORITY 10
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -51,6 +57,8 @@ struct proc {
   char *kstack;                // Bottom of kernel stack for this process
   enum procstate state;        // Process state
   int pid;                     // Process ID
+  int priority;                // Process scheduling priority (lower is higher priority)
+  int quantum_remaining;       // Remaining ticks in current time slice
   struct proc *parent;         // Parent process
   struct trapframe *tf;        // Trap frame for current syscall
   struct context *context;     // swtch() here to run process

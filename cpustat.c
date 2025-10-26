@@ -8,9 +8,10 @@ int
 main(int argc, char *argv[])
 {
   struct cpustat st;
+  int count = 0;
 
-  // Loop forever, printing stats every second
-  while(1) {
+  // Loop for 10 iterations, printing stats every second
+  while(count < 10) {
     if(cpustat(&st) < 0) {
       printf(2, "cpustat failed\n");
       exit();
@@ -27,6 +28,7 @@ main(int argc, char *argv[])
     printf(1, "\n");
 
     sleep(100); // sleep for 100 ticks (1 second)
+    count++;
   }
 
   exit();

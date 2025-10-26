@@ -6,8 +6,13 @@
 #include "memlayout.h"
 #include "mmu.h"
 #include "proc.h"
+#include "spinlock.h"
 
 // --- Externs for cpustat ---
+extern struct {
+  struct spinlock lock;
+  struct proc proc[NPROC];
+} ptable;
 extern int cpu_load;
 extern int predicted_load;
 extern enum freq_level current_frequency;
@@ -125,3 +130,31 @@ sys_cpustat(void)
   return 0;
 }
 // --- End of new system call ---
+
+// System call to set process priority
+int
+sys_setpriority(void)
+{
+  int pid, priority;
+
+  if(argint(0, &pid) < 0)
+    return -1;
+  if(argint(1, &priority) < 0)
+    return -1;
+
+  // Validate priority range (e.g., 0-20, lower is higher priority)
+  if(priority < 0 || priority > 20)
+    return -1;
+
+  struct proc *p;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->pid == pid){
+      p->priority = priority;
+      release(&ptable.lock);
+      return 0;
+    }
+  }
+  release(&ptable.lock);
+  return -1; // PID not found
+}

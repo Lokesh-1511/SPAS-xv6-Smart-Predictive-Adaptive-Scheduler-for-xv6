@@ -182,6 +182,9 @@ UPROGS=\
 	_wc\
 	_zombie\
 	_cpustat\
+	_spas_test\
+	_setpriority\
+	_spin\
 
 fs.img: mkfs README $(UPROGS)
 	./mkfs fs.img README $(UPROGS)

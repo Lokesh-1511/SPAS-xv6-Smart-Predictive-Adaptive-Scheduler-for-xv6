@@ -46,6 +46,17 @@ int THRESH_LOW_TO_MED = 30; // 30%
 int THRESH_MED_TO_HIGH = 70; // 70%
 // --- End of Phase 2 Variables ---
 
+// --- Phase 5: Adaptive Thresholds Variables ---
+int oscillation_count = 0;     // Count of recent frequency switches
+int last_switch_tick = 0;      // Tick when last switch occurred
+int OSCILLATION_WINDOW = 1000; // Ticks to consider for oscillation (10 seconds)
+int MAX_OSCILLATION = 5;       // Max switches in window before widening
+int ADAPTATION_PERIOD = 5000;  // Ticks between threshold adjustments
+int last_adaptation_tick = 0;  // Last time thresholds were adjusted
+enum freq_level prev_frequency = LOW; // Track previous frequency for oscillation detection
+int adaptation_counter = 0;    // Counter for adaptation periods
+// --- End of Phase 5 Variables ---
+
 // --- Phase 4: Virtual Thermal Variables ---
 int virtual_temp = 250;     // Temperature in tenths of degrees C (e.g., 250 = 25.0 C)
 int HEATING_FACTOR = 20;    // UPDATED: Increase per % load per period (e.g., 100% load adds 2.0 C)
@@ -122,6 +133,9 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->killed = 0; // *** ADDED: Explicitly clear killed status as a memory safety fix ***
+  p->priority = DEFAULT_PRIORITY; // Initialize default priority
+  p->quantum_remaining = QUANTUM_MEDIUM; // Initialize quantum (will be updated when scheduled)
 
   release(&ptable.lock);
 
@@ -241,6 +255,11 @@ fork(void)
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
   pid = np->pid;
+
+  // Inherit parent's priority by default
+  np->priority = curproc->priority;
+  // Give child a fresh quantum
+  np->quantum_remaining = QUANTUM_MEDIUM;
 
   np->state = RUNNABLE;
 
@@ -362,26 +381,34 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+    // Select the RUNNABLE process with the lowest priority value
+    struct proc *best = 0;
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+      if(best == 0 || p->priority < best->priority)
+        best = p;
+    }
 
-      // --- Our new code: Found a process, so we are NOT idle ---
+    if(best){
+      // We found a process to run
       is_idle = 0;
-      // --- End of new code ---
+      // Set quantum based on current frequency
+      if(current_frequency == LOW)
+        best->quantum_remaining = QUANTUM_LOW;
+      else if(current_frequency == MEDIUM)
+        best->quantum_remaining = QUANTUM_MEDIUM;
+      else // HIGH
+        best->quantum_remaining = QUANTUM_HIGH;
+      c->proc = best;
+      switchuvm(best);
+      best->state = RUNNING;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
-
-      swtch(&(c->scheduler), p->context);
+      swtch(&(c->scheduler), best->context);
       switchkvm();
 
       // Process is done running for now.
-      // It should have changed its p->state before coming back.
+      // It should have changed its state before coming back.
       c->proc = 0;
     }
     release(&ptable.lock);

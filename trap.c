@@ -39,7 +39,18 @@ extern int HEATING_FACTOR;
 extern int COOLING_FACTOR;
 extern int TEMP_THROTTLE_LIMIT;
 extern int AMBIENT_TEMP;
-// --- End of Phase 4 Externs ---
+// --- End Phase 4 ---
+
+// --- Phase 5: Adaptive Thresholds Externs ---
+extern int oscillation_count;
+extern int last_switch_tick;
+extern int OSCILLATION_WINDOW;
+extern int MAX_OSCILLATION;
+extern int ADAPTATION_PERIOD;
+extern int last_adaptation_tick;
+extern enum freq_level prev_frequency;
+extern int adaptation_counter;
+// --- End Phase 5 ---
 
 
 void
@@ -121,6 +132,39 @@ update_scheduler_analytics(void)
   current_frequency = next_frequency;
 
 
+  // --- Phase 5: Adaptive Thresholds ---
+  // Check for frequency change (oscillation detection)
+  if (current_frequency != prev_frequency) {
+    oscillation_count++;
+    last_switch_tick = ticks;  // Use global ticks
+    prev_frequency = current_frequency;
+  }
+
+  // Reset oscillation count if window expired
+  if (ticks - last_switch_tick > OSCILLATION_WINDOW) {
+    oscillation_count = 0;
+  }
+
+  // Adaptive logic: widen thresholds if oscillating
+  if (oscillation_count >= MAX_OSCILLATION) {
+    THRESH_LOW_TO_MED += 5;
+    THRESH_MED_TO_HIGH += 5;
+    if (THRESH_MED_TO_HIGH > 90) THRESH_MED_TO_HIGH = 90;
+    if (THRESH_LOW_TO_MED > THRESH_MED_TO_HIGH - 10) THRESH_LOW_TO_MED = THRESH_MED_TO_HIGH - 10;
+    oscillation_count = 0;  // Reset after adaptation
+  }
+
+  // Periodic tuning: narrow thresholds if stable and low load
+  adaptation_counter++;
+  if (adaptation_counter >= (ADAPTATION_PERIOD / LOAD_PERIOD)) {
+    adaptation_counter = 0;
+    if (oscillation_count == 0 && predicted_load < 20) {
+      THRESH_LOW_TO_MED = THRESH_LOW_TO_MED > 20 ? THRESH_LOW_TO_MED - 2 : 20;
+      THRESH_MED_TO_HIGH = THRESH_MED_TO_HIGH > 40 ? THRESH_MED_TO_HIGH - 2 : 40;
+    }
+  }
+  // --- End Phase 5 ---
+
   // 5. Reset counters for the next period
   tot_ticks = 0;
   idle_ticks = 0;
@@ -152,6 +196,15 @@ trap(struct trapframe *tf)
       tot_ticks++;       // Increment total ticks
       if(is_idle)
         idle_ticks++;    // Increment idle ticks if scheduler is idle
+
+      // Quantum enforcement: decrement current process's quantum
+      struct proc *cur = myproc();
+      if(cur && cur->state == RUNNING && cur->quantum_remaining > 0){
+        cur->quantum_remaining--;
+        if(cur->quantum_remaining == 0){
+          yield();  // Time slice expired, yield CPU
+        }
+      }
 
       // Call our new scheduler logic periodically
       if(ticks % LOAD_PERIOD == 0)

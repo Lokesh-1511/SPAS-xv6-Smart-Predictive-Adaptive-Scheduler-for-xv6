@@ -25,6 +25,7 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 int cpustat(struct cpustat*); // <-- ADDED THIS LINE
+int setpriority(int, int);
 
 // ulib.c
 int stat(const char*, struct stat*);
